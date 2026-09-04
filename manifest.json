@@ -1,0 +1,14 @@
+{
+  "name": "Local Files+",
+  "description": "Real tag metadata as sortable, filterable columns on the Local Files page: artist, album artist, year, genre, bitrate/quality, file type, size, folder, and more.",
+  "preview": "preview.png",
+  "main": "local-files-plus.js",
+  "readme": "README.md",
+  "authors": [
+    {
+      "name": "yusufaf",
+      "url": "https://github.com/yusufaf"
+    }
+  ],
+  "tags": ["local files", "metadata", "tags", "columns", "id3"]
+}

@@ -1,0 +1,19 @@
+{
+  "name": "spicetify-local-files-plus",
+  "version": "0.1.0",
+  "description": "Real tag metadata (artist, album artist, year, genre, bitrate, and more) as sortable, filterable columns on Spotify's Local Files page.",
+  "main": "local-files-plus.js",
+  "scripts": {
+    "test": "node --check local-files-plus.js",
+    "prepare": "husky"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "MIT",
+  "packageManager": "pnpm@10.24.0",
+  "devDependencies": {
+    "@commitlint/cli": "^20.5.3",
+    "@commitlint/config-conventional": "^20.5.3",
+    "husky": "^9.1.7"
+  }
+}
