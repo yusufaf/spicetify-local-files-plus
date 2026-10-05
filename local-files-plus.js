@@ -1,6 +1,6 @@
 // @ts-check
 // x-release-please-start-version
-// VERSION: 0.1.0
+// VERSION: 0.2.0
 // x-release-please-end-version
 //
 // Reads real tag metadata (artist, album artist, year, genre, bitrate/quality, and
