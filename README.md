@@ -1,5 +1,9 @@
 # Local Files+
 
+<!-- site:skip-start -->
+**Documentation:** https://spicetify.yusufaf.dev/local-files-plus/
+<!-- site:skip-end -->
+
 A [Spicetify](https://spicetify.app/) extension that reads the real tag metadata off
 your local audio files — artist, album artist, year, genre, bitrate/quality, and more
 — and adds it back into Spotify's **Local Files** page as sortable, filterable
