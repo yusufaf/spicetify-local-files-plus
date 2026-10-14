@@ -39,11 +39,26 @@ already knows about.
 
 ## Install
 
-Via [Spicetify Marketplace](https://github.com/spicetify/marketplace), or manually:
+Requires [Spicetify](https://spicetify.app/docs/getting-started), installed and applied at least once.
 
-1. Copy `local-files-plus.js` into your Spicetify `Extensions` folder.
-2. Add `local-files-plus.js` to the `extensions` line in `config-xpui.ini`.
-3. `spicetify apply`.
+### From Spicetify Marketplace
+
+1. In Spotify, open [Marketplace](https://github.com/spicetify/marketplace) (the shopping-cart icon at the top left) and stay on the **Extensions** tab.
+2. Type `Local Files+` into **Search Extensions…**.
+3. If no card shows up, click **Load more** below the results until it does. Marketplace only searches the extensions it has already loaded, 100 repositories at a time, so this one usually isn't there on the first try. Changing **Sort by** doesn't help, since it only reorders what's loaded.
+4. Hover the **Local Files+** card, click its download button, then click **Reload now**.
+
+### Manually
+
+1. Download [`local-files-plus.js`](https://raw.githubusercontent.com/yusufaf/spicetify-local-files-plus/main/local-files-plus.js) (right-click → **Save link as…**) into your Spicetify `Extensions` folder:
+   - Windows: `%APPDATA%\spicetify\Extensions`
+   - macOS / Linux: `~/.config/spicetify/Extensions`
+2. Enable it and apply:
+
+   ```bash
+   spicetify config extensions local-files-plus.js
+   spicetify apply
+   ```
 
 ## Setup
 
