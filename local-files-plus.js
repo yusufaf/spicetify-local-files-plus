@@ -68,6 +68,10 @@
   const HANDLE_KEY = "music-folder";
   const CONFIG_KEY = "local-files-plus-config";
 
+  /** Docs page for this extension and the hub listing the others, linked from the settings modal */
+  const DOCS_URL = "https://spicetify.yusufaf.dev/local-files-plus/";
+  const HUB_URL = "https://spicetify.yusufaf.dev/";
+
   const AUDIO_EXTENSIONS = new Set([".mp3", ".m4a", ".mp4", ".flac", ".ogg", ".oga", ".opus", ".wav", ".aac", ".wma"]);
 
   const LOCAL_FILES_PATH = "/collection/local-files";
@@ -1636,6 +1640,23 @@
     if (rescanBtn.disabled) rescanBtn.style.opacity = "0.5";
     rescanBtn.addEventListener("click", afterGrant);
     container.appendChild(rescanBtn);
+
+    const footer = document.createElement("div");
+    footer.style.cssText = "display:flex;justify-content:flex-end;gap:12px;margin-top:16px;padding-top:10px;border-top:1px solid rgba(255,255,255,0.1);font-size:0.75rem;";
+    for (const [label, href, title] of [
+      ["Docs", DOCS_URL, "Local Files+ documentation"],
+      ["More extensions", HUB_URL, "More Spicetify extensions by yusufaf"],
+    ]) {
+      const link = document.createElement("a");
+      link.textContent = label;
+      link.href = href;
+      link.title = title;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      link.style.cssText = "color:var(--spice-subtext,#b3b3b3);text-decoration:none;";
+      footer.appendChild(link);
+    }
+    container.appendChild(footer);
 
     Spicetify.PopupModal.display({ title: "Local Files+", content: container, isLarge: false });
   }
