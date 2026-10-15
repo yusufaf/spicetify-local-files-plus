@@ -68,6 +68,9 @@
   const HANDLE_KEY = "music-folder";
   const CONFIG_KEY = "local-files-plus-config";
 
+  const HUB_URL = "https://spicetify.yusufaf.dev/";
+  const DOCS_URL = `${HUB_URL}local-files-plus/`;
+
   const AUDIO_EXTENSIONS = new Set([".mp3", ".m4a", ".mp4", ".flac", ".ogg", ".oga", ".opus", ".wav", ".aac", ".wma"]);
 
   const LOCAL_FILES_PATH = "/collection/local-files";
@@ -1120,6 +1123,24 @@
     return styleEl;
   }
 
+  /**
+   * The settings modal is otherwise inline-styled, but its footer links need
+   * :hover and :focus-visible states, which inline styles can't express.
+   * Kept out of #lfp-styles because updateGridStyle() overwrites that sheet.
+   */
+  function ensureModalStyles() {
+    if (document.getElementById("lfp-modal-styles")) return;
+    const el = document.createElement("style");
+    el.id = "lfp-modal-styles";
+    el.textContent = `
+      .lfp-settings-footer { display: flex; justify-content: flex-end; gap: 12px; margin-top: 16px; padding-top: 10px; border-top: 1px solid rgba(255, 255, 255, 0.1); font-size: 0.75rem; white-space: nowrap; }
+      .lfp-settings-footer a[href] { color: var(--spice-subtext, #a7a7a7); text-decoration: none; }
+      .lfp-settings-footer a[href]:hover { color: var(--spice-text, #fff); text-decoration: underline; }
+      .lfp-settings-footer a[href]:focus-visible { outline: 2px solid var(--spice-text, #fff); outline-offset: 2px; border-radius: 2px; }
+    `;
+    document.head.appendChild(el);
+  }
+
   function updateGridStyle() {
     const cols = activeColumns();
     ensureStyleEl();
@@ -1636,6 +1657,23 @@
     if (rescanBtn.disabled) rescanBtn.style.opacity = "0.5";
     rescanBtn.addEventListener("click", afterGrant);
     container.appendChild(rescanBtn);
+
+    ensureModalStyles();
+    const footer = document.createElement("div");
+    footer.className = "lfp-settings-footer";
+    for (const [label, href, title] of [
+      ["Docs", DOCS_URL, "Local Files+ documentation"],
+      ["More extensions", HUB_URL, "More Spicetify extensions by yusufaf"],
+    ]) {
+      const link = document.createElement("a");
+      link.textContent = label;
+      link.href = href;
+      link.title = title;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      footer.appendChild(link);
+    }
+    container.appendChild(footer);
 
     Spicetify.PopupModal.display({ title: "Local Files+", content: container, isLarge: false });
   }
