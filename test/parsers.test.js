@@ -36,10 +36,15 @@ test("reads the title from a Vorbis comment", () => {
   assert.equal(out.artist, "Someone");
 });
 
-test("marks ALAC in an M4A as lossless, and AAC as not", async () => {
-  const fileFor = (codec) => {
+test("marks ALAC in an M4A as lossless, and AAC as not, reading the sound track even when it isn't first", async () => {
+  const trak = (handler, codec) => {
+    const hdlr = box("hdlr", [0, 0, 0, 0], [0, 0, 0, 0], ascii(handler), new Array(12).fill(0));
     const stsd = box("stsd", [0, 0, 0, 0], u32(1), box(codec, new Array(28).fill(0)));
-    const moov = box("moov", box("trak", box("mdia", box("minf", box("stbl", stsd)))));
+    return box("trak", box("mdia", hdlr, box("minf", box("stbl", stsd))));
+  };
+  const fileFor = (codec) => {
+    // A chapter text track ahead of the audio, as audiobooks and some rips have.
+    const moov = box("moov", trak("text", "tx3g"), trak("soun", codec));
     return new Uint8Array([...box("ftyp", ascii("M4A ")), ...moov]);
   };
   for (const [codec, lossless] of [["alac", true], ["mp4a", false]]) {
