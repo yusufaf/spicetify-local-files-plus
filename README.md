@@ -64,8 +64,10 @@ Requires [Spicetify](https://spicetify.app/docs/getting-started), installed and 
 
 ## Setup
 
-Open the profile menu → **Local Files+** → **Choose music folder**, and pick the same
-folder Spotify uses for Local Files. The first scan parses every audio file in it;
+Open **Local Files+** settings from the profile menu, or from the **Local Files+ settings**
+button above the Local Files track list, then **Choose music folder** and pick the same
+folder Spotify uses for Local Files. (On Spotify 1.3.5 the profile-menu entry doesn't
+render, so use the button.) The first scan parses every audio file in it;
 later scans only re-parse files that changed.
 
 ## Supported formats

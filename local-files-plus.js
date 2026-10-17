@@ -1653,7 +1653,11 @@
   }
 
   function ensureFilterInput() {
-    if (document.getElementById("lfp-filter-input")) return;
+    // Rebuild a bar that lacks the settings button (left by an older build after
+    // a hot reload) rather than keeping it.
+    const existing = document.getElementById("lfp-filter-bar");
+    if (existing && existing.querySelector("#lfp-open-settings")) return;
+    if (existing) existing.remove();
     // Anchored above the header row (the same stable container used for header
     // cell insertion) rather than inside Spotify's own toolbar — that toolbar's
     // flex layout is not well understood and swallowed the input visually.
@@ -1683,7 +1687,7 @@
     settingsBtn.type = "button";
     settingsBtn.textContent = "Local Files+ settings";
     settingsBtn.style.cssText = "margin-left:auto; background:transparent; color:var(--spice-subtext,#a7a7a7); border:1px solid var(--spice-button-disabled,#5e5e5e); border-radius:500px; padding:4px 12px; font-size:0.75rem; cursor:pointer;";
-    settingsBtn.addEventListener("click", openSettingsModal);
+    settingsBtn.addEventListener("click", () => openSettingsModal());
     wrap.appendChild(input);
     wrap.appendChild(status);
     wrap.appendChild(settingsBtn);
@@ -1790,11 +1794,62 @@
 
   //#region Boot
 
-  // Spicetify.Menu.Item renders through React's JSX runtime, which Spotify 1.3.5
-  // loads after the Platform APIs, so constructing one too early throws.
-  async function waitForSpicetify() {
-    while (!(Spicetify && Spicetify.Platform && Spicetify.Platform.History && Spicetify.Platform.LocalFilesAPI && Spicetify.LocalStorage && Spicetify.Menu && Spicetify.PopupModal && Spicetify.ReactJSX && Spicetify.ReactJSX.jsx)) {
+  /**
+   * Polls until every named check passes. After `warnAfterMs`, logs once which
+   * ones are still missing, so a release that renames an API is diagnosable
+   * instead of silently doing nothing.
+   * @param {Record<string, () => unknown>} checks
+   * @param {number} warnAfterMs
+   */
+  async function waitFor(checks, warnAfterMs) {
+    const started = Date.now();
+    let warned = false;
+    for (;;) {
+      const missing = Object.keys(checks).filter((name) => !checks[name]());
+      if (missing.length === 0) return;
+      if (!warned && Date.now() - started > warnAfterMs) {
+        console.warn(LOG_PREFIX, "Still waiting for:", missing.join(", "));
+        warned = true;
+      }
       await new Promise((r) => setTimeout(r, 100));
+    }
+  }
+
+  // Only what the columns, filter and settings button need. The profile-menu
+  // entry is optional and waits separately in registerMenuEntry.
+  function waitForSpicetify() {
+    return waitFor(
+      {
+        "Spicetify.Platform.History": () => window.Spicetify && Spicetify.Platform && Spicetify.Platform.History,
+        "Spicetify.Platform.LocalFilesAPI": () => window.Spicetify && Spicetify.Platform && Spicetify.Platform.LocalFilesAPI,
+        "Spicetify.LocalStorage": () => window.Spicetify && Spicetify.LocalStorage,
+        "Spicetify.PopupModal": () => window.Spicetify && Spicetify.PopupModal,
+      },
+      10000,
+    );
+  }
+
+  /**
+   * Adds "Local Files+" to the profile menu, one of two ways into settings (the
+   * other is the button in the Local Files filter bar). Menu.Item renders through
+   * React's JSX runtime, which Spotify 1.3.5 loads after the Platform APIs, so it
+   * waits for both. This try/catch only covers creating and registering the item:
+   * an error when Spotify later renders the menu (1.3.5 throws "cannot be
+   * rendered outside a collection") happens inside Spotify's React tree, out of
+   * reach here.
+   */
+  async function registerMenuEntry() {
+    await waitFor(
+      {
+        "Spicetify.Menu": () => Spicetify.Menu && Spicetify.Menu.Item,
+        "Spicetify.ReactJSX": () => Spicetify.ReactJSX && Spicetify.ReactJSX.jsx,
+      },
+      10000,
+    );
+    try {
+      new Spicetify.Menu.Item("Local Files+", false, () => openSettingsModal()).register();
+    } catch (e) {
+      console.error(LOG_PREFIX, "Couldn't add the profile-menu entry.", e);
     }
   }
 
@@ -1819,13 +1874,8 @@
 
     updateGridStyle();
 
-    // The menu entry is the only way into settings, but the columns work without
-    // it, so a failure here mustn't stop the rest of startup.
-    try {
-      new Spicetify.Menu.Item("Local Files+", false, openSettingsModal).register();
-    } catch (e) {
-      console.error(LOG_PREFIX, "Couldn't add the profile-menu entry.", e);
-    }
+    // Not awaited: the columns and the filter-bar button don't depend on it.
+    registerMenuEntry();
 
     setupObserver();
     tryAugmentNativeColumnPicker();

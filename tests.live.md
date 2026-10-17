@@ -28,8 +28,9 @@ artist, year, genre, track/disc number should match exactly.
 
 ## T2: Grant + scan
 
-- Profile menu → Local Files+ → Choose music folder → pick the same folder Spotify
-  uses for Local Files.
+- Profile menu → Local Files+ (or the **Local Files+ settings** button above the
+  Local Files track list) → Choose music folder → pick the same folder Spotify uses
+  for Local Files. Check both entry points open the same modal.
 - Console: `Scan complete: N parsed, ... total.` — `total` should match the number of
   audio files actually in the folder.
 - IndexedDB `tracks` store count should equal `total`.
