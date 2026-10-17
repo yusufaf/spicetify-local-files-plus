@@ -1676,8 +1676,17 @@
     const status = document.createElement("span");
     status.id = "lfp-filter-status";
     status.style.cssText = "font-size:0.75rem; color:var(--spice-subtext,#a7a7a7); white-space:nowrap;";
+    // A second way into settings: the profile-menu entry depends on Spicetify's
+    // menu API, which some Spotify releases break (1.3.5 throws on render).
+    const settingsBtn = document.createElement("button");
+    settingsBtn.id = "lfp-open-settings";
+    settingsBtn.type = "button";
+    settingsBtn.textContent = "Local Files+ settings";
+    settingsBtn.style.cssText = "margin-left:auto; background:transparent; color:var(--spice-subtext,#a7a7a7); border:1px solid var(--spice-button-disabled,#5e5e5e); border-radius:500px; padding:4px 12px; font-size:0.75rem; cursor:pointer;";
+    settingsBtn.addEventListener("click", openSettingsModal);
     wrap.appendChild(input);
     wrap.appendChild(status);
+    wrap.appendChild(settingsBtn);
     headerRow.parentElement.insertBefore(wrap, headerRow);
   }
 
@@ -1781,8 +1790,10 @@
 
   //#region Boot
 
+  // Spicetify.Menu.Item renders through React's JSX runtime, which Spotify 1.3.5
+  // loads after the Platform APIs, so constructing one too early throws.
   async function waitForSpicetify() {
-    while (!(Spicetify && Spicetify.Platform && Spicetify.Platform.History && Spicetify.Platform.LocalFilesAPI && Spicetify.LocalStorage && Spicetify.Menu && Spicetify.PopupModal)) {
+    while (!(Spicetify && Spicetify.Platform && Spicetify.Platform.History && Spicetify.Platform.LocalFilesAPI && Spicetify.LocalStorage && Spicetify.Menu && Spicetify.PopupModal && Spicetify.ReactJSX && Spicetify.ReactJSX.jsx)) {
       await new Promise((r) => setTimeout(r, 100));
     }
   }
@@ -1808,7 +1819,13 @@
 
     updateGridStyle();
 
-    new Spicetify.Menu.Item("Local Files+", false, openSettingsModal).register();
+    // The menu entry is the only way into settings, but the columns work without
+    // it, so a failure here mustn't stop the rest of startup.
+    try {
+      new Spicetify.Menu.Item("Local Files+", false, openSettingsModal).register();
+    } catch (e) {
+      console.error(LOG_PREFIX, "Couldn't add the profile-menu entry.", e);
+    }
 
     setupObserver();
     tryAugmentNativeColumnPicker();
