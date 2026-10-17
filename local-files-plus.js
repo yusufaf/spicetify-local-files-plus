@@ -18,6 +18,7 @@
 
   /**
    * @typedef {Object} ParsedTags
+   * @property {string|null} title
    * @property {string|null} artist
    * @property {string|null} albumArtist
    * @property {string|null} album
@@ -37,7 +38,8 @@
    */
 
   /**
-   * @typedef {Object} FileRecord Cached per-file index entry, keyed by lowercased absolute path.
+   * @typedef {Object} FileRecord Cached per-file index entry, keyed by its lowercased path
+   *   from the chosen folder down (`music\nujabes\song.mp3`).
    * @property {string} path
    * @property {string} folder
    * @property {string} filename
@@ -47,6 +49,7 @@
    * @property {ParsedTags} tags
    * @property {QualityInfo} quality
    * @property {number} scannedAt
+   * @property {number} [parserVersion] PARSER_VERSION the tags were read with
    */
 
   /**
@@ -63,6 +66,8 @@
   const LOG_PREFIX = "[Local Files+]";
   const DB_NAME = "local-files-plus";
   const DB_VERSION = 1;
+  /** Bump when the parsers start reading something new, so a rescan re-reads files it cached before. */
+  const PARSER_VERSION = 2;
   const STORE_HANDLES = "handles";
   const STORE_TRACKS = "tracks";
   const HANDLE_KEY = "music-folder";
@@ -184,7 +189,7 @@
       text = new TextDecoder("iso-8859-1").decode(body);
     }
     // Strip trailing NULs and split multi-value fields (v2.4 allows NUL-separated values).
-    return text.replace(/ +$/g, "").split(" ")[0].trim();
+    return text.replace(/\0+$/g, "").split("\0")[0].trim();
   }
 
   function decodeUtf16(bytes, hasBom) {
@@ -232,6 +237,11 @@
 
   //#endregion
 
+  /** @returns {ParsedTags} every field null; parsers fill in what they find */
+  function emptyTags() {
+    return { title: null, artist: null, albumArtist: null, album: null, year: null, genre: null, trackNo: null, discNo: null, bpm: null };
+  }
+
   //#region ID3v2 (MP3) parser
 
   /**
@@ -267,11 +277,11 @@
     const frameHeaderLen = idLen + sizeLen + (major === 2 ? 0 : 2);
 
     const wantedFrames = major === 2
-      ? { TP1: "artist", TP2: "albumArtist", TAL: "album", TYE: "year", TCO: "genre", TRK: "trackNo", TPA: "discNo", TBP: "bpm" }
-      : { TPE1: "artist", TPE2: "albumArtist", TALB: "album", TYER: "year", TDRC: "year", TCON: "genre", TRCK: "trackNo", TPOS: "discNo", TBPM: "bpm" };
+      ? { TT2: "title", TP1: "artist", TP2: "albumArtist", TAL: "album", TYE: "year", TCO: "genre", TRK: "trackNo", TPA: "discNo", TBP: "bpm" }
+      : { TIT2: "title", TPE1: "artist", TPE2: "albumArtist", TALB: "album", TYER: "year", TDRC: "year", TCON: "genre", TRCK: "trackNo", TPOS: "discNo", TBPM: "bpm" };
 
     /** @type {ParsedTags} */
-    const out = { artist: null, albumArtist: null, album: null, year: null, genre: null, trackNo: null, discNo: null, bpm: null };
+    const out = emptyTags();
 
     let off = 0;
     while (off + frameHeaderLen <= bytes.length) {
@@ -339,8 +349,8 @@
   function parseId3v1(last128) {
     const b = u8(last128);
     if (b.length < 128 || b[0] !== 0x54 || b[1] !== 0x41 || b[2] !== 0x47) return null; // "TAG"
-    const latin1 = (start, len) => new TextDecoder("iso-8859-1").decode(b.subarray(start, start + len)).replace(/ +$/g, "").replace(/\s+$/, "");
-    const out = { artist: latin1(33, 30) || null, albumArtist: null, album: latin1(63, 30) || null, year: null, genre: null, trackNo: null, discNo: null, bpm: null };
+    const latin1 = (start, len) => new TextDecoder("iso-8859-1").decode(b.subarray(start, start + len)).replace(/\0+$/g, "").replace(/\s+$/, "");
+    const out = { title: latin1(3, 30) || null, artist: latin1(33, 30) || null, albumArtist: null, album: latin1(63, 30) || null, year: null, genre: null, trackNo: null, discNo: null, bpm: null };
     const yearStr = latin1(93, 4);
     if (/^\d{4}$/.test(yearStr)) out.year = parseInt(yearStr, 10);
     // ID3v1.1: comment[28] === 0 means comment[29] is the track number.
@@ -362,7 +372,7 @@
     if (magic.length < 4 || String.fromCharCode(...magic) !== "fLaC") return null;
 
     /** @type {ParsedTags} */
-    const tags = { artist: null, albumArtist: null, album: null, year: null, genre: null, trackNo: null, discNo: null, bpm: null };
+    const tags = emptyTags();
     /** @type {QualityInfo} */
     const quality = { lossless: true, bitrateKbps: null, sampleRateHz: null, bitDepth: null };
 
@@ -416,6 +426,7 @@
       const value = entry.slice(eq + 1);
       if (!value) continue;
       switch (key) {
+        case "TITLE": if (!out.title) out.title = value; break;
         case "ARTIST": if (!out.artist) out.artist = value; break;
         case "ALBUMARTIST": case "ALBUM ARTIST": out.albumArtist = value; break;
         case "ALBUM": if (!out.album) out.album = value; break;
@@ -433,6 +444,7 @@
   //#region MP4 / M4A parser
 
   const MP4_TEXT_ATOMS = {
+    "©nam": "title",
     "©ART": "artist",
     "aART": "albumArtist",
     "©alb": "album",
@@ -476,10 +488,39 @@
     const ilst = findMp4Atom(moov, ["udta", "meta:full", "ilst"]);
 
     /** @type {ParsedTags} */
-    const tags = { artist: null, albumArtist: null, album: null, year: null, genre: null, trackNo: null, discNo: null, bpm: null };
+    const tags = emptyTags();
     if (ilst) parseMp4Ilst(ilst, tags);
 
-    return { tags, quality: { lossless: false, bitrateKbps: null, sampleRateHz: null, bitDepth: null } };
+    // ALAC and FLAC-in-MP4 are lossless, and showing them as a kbps figure would mislead.
+    const codec = mp4AudioCodec(moov);
+    const lossless = codec === "alac" || codec === "fLaC";
+
+    return { tags, quality: { lossless, bitrateKbps: null, sampleRateHz: null, bitDepth: null } };
+  }
+
+  /**
+   * The codec of the first sound track: the first sample entry in its stsd, after
+   * the entry count. The first trak isn't always audio (chapters, cover art), so
+   * each one's handler is checked.
+   * @param {Uint8Array} moov the moov atom's body
+   * @returns {string|null} e.g. "mp4a", "alac", "fLaC"
+   */
+  function mp4AudioCodec(moov) {
+    let off = 0;
+    while (off + 8 <= moov.length) {
+      const size = readUint32BE(moov, off);
+      if (size < 8 || off + size > moov.length) break;
+      if (readFourCC(moov, off + 4) === "trak") {
+        const trak = moov.subarray(off + 8, off + size);
+        const hdlr = findMp4Atom(trak, ["mdia", "hdlr:full"]);
+        if (hdlr && hdlr.length >= 8 && readFourCC(hdlr, 4) === "soun") {
+          const stsd = findMp4Atom(trak, ["mdia", "minf", "stbl", "stsd:full"]);
+          return stsd && stsd.length >= 12 ? readFourCC(stsd, 8) : null;
+        }
+      }
+      off += size;
+    }
+    return null;
   }
 
   /**
@@ -619,6 +660,121 @@
 
   //#endregion
 
+  //#region Matching helpers (pure)
+
+  /**
+   * Lowercases and collapses everything but letters, combining marks and digits, in
+   * any script, to single spaces. NFC first: macOS file names come back decomposed
+   * ("e" + accent) where Spotify's track names are composed ("é").
+   */
+  function normalizeForMatch(s) {
+    return (s || "").normalize("NFC").toLowerCase().replace(/[^\p{L}\p{M}\p{N}]+/gu, " ").trim();
+  }
+
+  /**
+   * Index keys are paths from the chosen folder down (`music\nujabes\song.mp3`),
+   * because the File System Access API never reveals where that folder lives.
+   * Spotify gives absolute paths (`C:\Users\me\Music\Nujabes\song.mp3`), so this
+   * looks up the longest trailing run of segments the index has.
+   * @param {Map<string, any>} index keyed by lowercased, `\`-separated relative path
+   * @param {string} absolutePath
+   * @returns {string|null} the matching index key
+   */
+  function findIndexKeyForPath(index, absolutePath) {
+    const segments = absolutePath.toLowerCase().split(/[\\/]+/).filter(Boolean);
+    // Stop before the last segment alone: every key includes at least its folder.
+    // Two folders with the same name in different places (D:/Music, C:/Backup/Music)
+    // can't be told apart, because the API never reveals where the chosen one lives.
+    for (let i = 0; i < segments.length - 1; i++) {
+      const key = segments.slice(i).join("\\");
+      if (index.has(key)) return key;
+    }
+    return null;
+  }
+
+  /**
+   * Names a file could appear under in Spotify, for tracks Spotify gives no path
+   * for. `names` are its title tag and file name; `looseNames` its file name
+   * without a leading track number ("01 - Song", "1. Song", "06 Song"), tried only
+   * after every track has had a go at the exact names, since "7 Rings" would
+   * otherwise also answer to "Rings".
+   * @param {{ filename: string, tags: { title?: string|null } }} rec
+   * @returns {{ names: string[], looseNames: string[] }} normalized, distinct, non-empty
+   */
+  function matchNamesForRecord(rec) {
+    const stem = rec.filename.replace(/\.[^.]+$/, "");
+    const withoutNumber = stem.replace(/^\s*\d{1,3}\s*[-._)]\s*|^\s*\d{1,3}\s+/, "");
+    const names = [...new Set([rec.tags.title, stem].map(normalizeForMatch).filter(Boolean))];
+    const loose = normalizeForMatch(withoutNumber);
+    return { names, looseNames: loose && !names.includes(loose) ? [loose] : [] };
+  }
+
+  function decodePathFromImageUrl(url) {
+    if (!url || !url.startsWith("spotify:localfileimage:")) return null;
+    try {
+      return decodeURIComponent(url.slice("spotify:localfileimage:".length));
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /**
+   * @param {any[]} tracks LocalFilesAPI.getTracks() result
+   * @param {Map<string, FileRecord>} index the scanned files, keyed as in runScan
+   * @returns {Map<string, FileRecord>} keyed by track.uri
+   */
+  function matchTracksToFiles(tracks, index) {
+    /** @type {Map<string, FileRecord>} */
+    const matched = new Map();
+    /** @type {Set<FileRecord>} records already given to a track */
+    const claimed = new Set();
+    const claim = (track, rec) => {
+      matched.set(track.uri, rec);
+      claimed.add(rec);
+      const kbps = computeBitrateKbps(rec.size, track.duration.milliseconds / 1000);
+      if (!rec.quality.lossless) rec.quality.bitrateKbps = kbps;
+    };
+
+    // Tier 1: the absolute path Spotify embeds in a local track's image URL. It is
+    // only there for tracks Spotify found some album tag for.
+    for (const track of tracks) {
+      const url = track.album && track.album.images && track.album.images[0] && track.album.images[0].url;
+      const path = decodePathFromImageUrl(url);
+      const key = path && findIndexKeyForPath(index, path);
+      const rec = key && index.get(key);
+      if (rec && !claimed.has(rec)) claim(track, rec);
+    }
+
+    // Tier 2: the rest by name, exact names (title tag, file name) for every track
+    // before loose ones (file name minus a track number), so a loose name can't take
+    // a file another track matches exactly. Duplicate names pair off in order.
+    /** @type {Map<string, FileRecord[]>} */
+    const byName = new Map();
+    /** @type {Map<string, FileRecord[]>} */
+    const byLooseName = new Map();
+    const add = (map, name, rec) => {
+      if (!map.has(name)) map.set(name, []);
+      map.get(name).push(rec);
+    };
+    for (const rec of index.values()) {
+      if (claimed.has(rec)) continue;
+      const { names, looseNames } = matchNamesForRecord(rec);
+      for (const name of names) add(byName, name, rec);
+      for (const name of looseNames) add(byLooseName, name, rec);
+    }
+    for (const map of [byName, byLooseName]) {
+      for (const track of tracks) {
+        if (matched.has(track.uri)) continue;
+        const rec = (map.get(normalizeForMatch(track.name)) || []).find((r) => !claimed.has(r));
+        if (rec) claim(track, rec);
+      }
+    }
+
+    return matched;
+  }
+
+  //#endregion
+
   //#region Node/browser dual-environment export (parsers are pure — testable under `node`)
 
   if (typeof module !== "undefined" && module.exports) {
@@ -636,6 +792,10 @@
       findMp4Atom,
       parseMp4Ilst,
       computeBitrateKbps,
+      normalizeForMatch,
+      findIndexKeyForPath,
+      matchNamesForRecord,
+      matchTracksToFiles,
       formatQuality,
       formatBytes,
       formatDate,
@@ -852,7 +1012,7 @@
   /** @param {File} file @param {string} ext @returns {Promise<{ tags: ParsedTags, quality: QualityInfo }>} */
   async function parseFile(file, ext) {
     const readRange = makeReadRange(file);
-    const empty = { artist: null, albumArtist: null, album: null, year: null, genre: null, trackNo: null, discNo: null, bpm: null };
+    const empty = emptyTags();
 
     if (ext === ".mp3" || ext === ".aac" || ext === ".wma") {
       const headerBuf = await readRange(0, 10);
@@ -902,7 +1062,7 @@
         try {
           const file = await handle.getFile();
           const prior = existing.get(key);
-          if (prior && prior.size === file.size && prior.lastModified === file.lastModified) {
+          if (prior && prior.size === file.size && prior.lastModified === file.lastModified && prior.parserVersion === PARSER_VERSION) {
             nextIndex.set(key, prior);
             lastScanStats.skippedUnchanged++;
             continue;
@@ -920,6 +1080,7 @@
             tags: parsed.tags,
             quality: parsed.quality,
             scannedAt: Date.now(),
+            parserVersion: PARSER_VERSION,
           };
           nextIndex.set(key, rec);
           lastScanStats.parsed++;
@@ -957,70 +1118,6 @@
 
   //#region Matching: LocalFilesAPI tracks <-> FileRecord
 
-  function decodePathFromImageUrl(url) {
-    if (!url || !url.startsWith("spotify:localfileimage:")) return null;
-    try {
-      return decodeURIComponent(url.slice("spotify:localfileimage:".length));
-    } catch (e) {
-      return null;
-    }
-  }
-
-  /** @param {any[]} tracks LocalFilesAPI.getTracks() result @returns {Map<string, FileRecord>} keyed by track.uri */
-  function matchTracksToFiles(tracks) {
-    /** @type {Map<string, FileRecord>} */
-    const matched = new Map();
-
-    // Bucket unmatched-by-path file records by rounded duration for fallback lookup.
-    // (Populated lazily below once we know which paths were claimed by tier 1.)
-    const claimedPaths = new Set();
-
-    for (const track of tracks) {
-      const url = track.album && track.album.images && track.album.images[0] && track.album.images[0].url;
-      const path = decodePathFromImageUrl(url);
-      if (path) {
-        const rec = fileIndex.get(path.toLowerCase());
-        if (rec) {
-          matched.set(track.uri, rec);
-          claimedPaths.add(path.toLowerCase());
-          const kbps = computeBitrateKbps(rec.size, track.duration.milliseconds / 1000);
-          if (!rec.quality.lossless) rec.quality.bitrateKbps = kbps;
-        }
-      }
-    }
-
-    // Tier 2: fuzzy match remaining tracks by normalized filename stem. Candidates
-    // are consumed with `.shift()` so exact-duplicate stems pair off deterministically
-    // rather than every remaining track matching the same first candidate.
-    const remaining = tracks.filter((t) => !matched.has(t.uri));
-    if (remaining.length) {
-      /** @type {Map<string, FileRecord[]>} keyed by normalized filename stem */
-      const byStem = new Map();
-      for (const [key, rec] of fileIndex) {
-        if (claimedPaths.has(key)) continue;
-        const stem = normalizeForMatch(rec.filename.replace(/\.[^.]+$/, ""));
-        if (!byStem.has(stem)) byStem.set(stem, []);
-        byStem.get(stem).push(rec);
-      }
-      for (const track of remaining) {
-        const stem = normalizeForMatch(track.name);
-        const candidates = byStem.get(stem);
-        if (candidates && candidates.length) {
-          const rec = candidates.shift();
-          matched.set(track.uri, rec);
-          const kbps = computeBitrateKbps(rec.size, track.duration.milliseconds / 1000);
-          if (!rec.quality.lossless) rec.quality.bitrateKbps = kbps;
-        }
-      }
-    }
-
-    return matched;
-  }
-
-  function normalizeForMatch(s) {
-    return (s || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
-  }
-
   /** @type {Map<string, FileRecord>} keyed by track.uri, refreshed each time the matcher runs */
   let trackMatchIndex = new Map();
 
@@ -1032,7 +1129,7 @@
     try {
       const tracks = await Spicetify.Platform.LocalFilesAPI.getTracks();
       cachedTracks = tracks;
-      trackMatchIndex = matchTracksToFiles(tracks);
+      trackMatchIndex = matchTracksToFiles(tracks, fileIndex);
     } catch (e) {
       console.warn(LOG_PREFIX, "Failed to fetch local tracks for matching.", e);
     }
@@ -1380,13 +1477,13 @@
       const m = tok.match(/^(\w+):(.+)$/);
       if (!m) {
         const needle = tok.toLowerCase();
-        if (needle === "flac" || needle === "lossless") {
+        if (needle === "lossless") {
           preds.push((e) => !!(e.rec && e.rec.quality.lossless));
         } else if (/^(mp3|m4a|mp4|flac|ogg|oga|opus|wav|aac|wma)$/.test(needle)) {
           preds.push((e) => e.rec && e.rec.ext === "." + needle);
         } else {
           preds.push((e) => {
-            const hay = [e.track.name, e.rec && e.rec.tags.artist, e.rec && e.rec.tags.album, e.rec && e.rec.folder]
+            const hay = [e.track.name, e.rec && e.rec.tags.title, e.rec && e.rec.tags.artist, e.rec && e.rec.tags.album, e.rec && e.rec.folder]
               .filter(Boolean).join(" ").toLowerCase();
             return hay.includes(needle);
           });
@@ -1419,8 +1516,8 @@
       } else if (lowerKey === "missing") {
         const field = val.toLowerCase();
         preds.push((e) => {
-          if (!e.rec) return true;
           if (field === "album") return !e.track.album || !e.track.album.name;
+          if (!e.rec) return false; // not matched to a file, so there are no tags to judge
           if (field === "artist") return !e.rec.tags.artist;
           if (field === "track" || field === "tracknumber") return !e.rec.tags.trackNo;
           return false;
@@ -1428,7 +1525,9 @@
       } else if (lowerKey === "type" || lowerKey === "ext") {
         const needle = "." + val.toLowerCase().replace(/^\./, "");
         preds.push((e) => e.rec && e.rec.ext === needle);
-      } else if (lowerKey === "lossless" || lowerKey === "flac") {
+      } else if (lowerKey === "flac") {
+        preds.push((e) => !!(e.rec && e.rec.ext === ".flac"));
+      } else if (lowerKey === "lossless") {
         preds.push((e) => !!(e.rec && e.rec.quality.lossless));
       }
     }
@@ -1554,7 +1653,11 @@
   }
 
   function ensureFilterInput() {
-    if (document.getElementById("lfp-filter-input")) return;
+    // Rebuild a bar that lacks the settings button (left by an older build after
+    // a hot reload) rather than keeping it.
+    const existing = document.getElementById("lfp-filter-bar");
+    if (existing && existing.querySelector("#lfp-open-settings")) return;
+    if (existing) existing.remove();
     // Anchored above the header row (the same stable container used for header
     // cell insertion) rather than inside Spotify's own toolbar — that toolbar's
     // flex layout is not well understood and swallowed the input visually.
@@ -1577,8 +1680,17 @@
     const status = document.createElement("span");
     status.id = "lfp-filter-status";
     status.style.cssText = "font-size:0.75rem; color:var(--spice-subtext,#a7a7a7); white-space:nowrap;";
+    // A second way into settings: the profile-menu entry depends on Spicetify's
+    // menu API, which some Spotify releases break (1.3.5 throws on render).
+    const settingsBtn = document.createElement("button");
+    settingsBtn.id = "lfp-open-settings";
+    settingsBtn.type = "button";
+    settingsBtn.textContent = "Local Files+ settings";
+    settingsBtn.style.cssText = "margin-left:auto; background:transparent; color:var(--spice-subtext,#a7a7a7); border:1px solid var(--spice-button-disabled,#5e5e5e); border-radius:500px; padding:4px 12px; font-size:0.75rem; cursor:pointer;";
+    settingsBtn.addEventListener("click", () => openSettingsModal());
     wrap.appendChild(input);
     wrap.appendChild(status);
+    wrap.appendChild(settingsBtn);
     headerRow.parentElement.insertBefore(wrap, headerRow);
   }
 
@@ -1682,9 +1794,62 @@
 
   //#region Boot
 
-  async function waitForSpicetify() {
-    while (!(Spicetify && Spicetify.Platform && Spicetify.Platform.History && Spicetify.Platform.LocalFilesAPI && Spicetify.LocalStorage && Spicetify.Menu && Spicetify.PopupModal)) {
+  /**
+   * Polls until every named check passes. After `warnAfterMs`, logs once which
+   * ones are still missing, so a release that renames an API is diagnosable
+   * instead of silently doing nothing.
+   * @param {Record<string, () => unknown>} checks
+   * @param {number} warnAfterMs
+   */
+  async function waitFor(checks, warnAfterMs) {
+    const started = Date.now();
+    let warned = false;
+    for (;;) {
+      const missing = Object.keys(checks).filter((name) => !checks[name]());
+      if (missing.length === 0) return;
+      if (!warned && Date.now() - started > warnAfterMs) {
+        console.warn(LOG_PREFIX, "Still waiting for:", missing.join(", "));
+        warned = true;
+      }
       await new Promise((r) => setTimeout(r, 100));
+    }
+  }
+
+  // Only what the columns, filter and settings button need. The profile-menu
+  // entry is optional and waits separately in registerMenuEntry.
+  function waitForSpicetify() {
+    return waitFor(
+      {
+        "Spicetify.Platform.History": () => window.Spicetify && Spicetify.Platform && Spicetify.Platform.History,
+        "Spicetify.Platform.LocalFilesAPI": () => window.Spicetify && Spicetify.Platform && Spicetify.Platform.LocalFilesAPI,
+        "Spicetify.LocalStorage": () => window.Spicetify && Spicetify.LocalStorage,
+        "Spicetify.PopupModal": () => window.Spicetify && Spicetify.PopupModal,
+      },
+      10000,
+    );
+  }
+
+  /**
+   * Adds "Local Files+" to the profile menu, one of two ways into settings (the
+   * other is the button in the Local Files filter bar). Menu.Item renders through
+   * React's JSX runtime, which Spotify 1.3.5 loads after the Platform APIs, so it
+   * waits for both. This try/catch only covers creating and registering the item:
+   * an error when Spotify later renders the menu (1.3.5 throws "cannot be
+   * rendered outside a collection") happens inside Spotify's React tree, out of
+   * reach here.
+   */
+  async function registerMenuEntry() {
+    await waitFor(
+      {
+        "Spicetify.Menu": () => Spicetify.Menu && Spicetify.Menu.Item,
+        "Spicetify.ReactJSX": () => Spicetify.ReactJSX && Spicetify.ReactJSX.jsx,
+      },
+      10000,
+    );
+    try {
+      new Spicetify.Menu.Item("Local Files+", false, () => openSettingsModal()).register();
+    } catch (e) {
+      console.error(LOG_PREFIX, "Couldn't add the profile-menu entry.", e);
     }
   }
 
@@ -1709,11 +1874,28 @@
 
     updateGridStyle();
 
-    new Spicetify.Menu.Item("Local Files+", false, openSettingsModal).register();
+    // Not awaited: the columns and the filter-bar button don't depend on it.
+    registerMenuEntry();
 
     setupObserver();
     tryAugmentNativeColumnPicker();
     scheduleInject();
+
+    // Records from an older parser have wrong or missing tags (v0.2.0 cut multi-word
+    // ID3 values short), so re-read them once. Without access yet, re-granting in
+    // the settings modal rescans anyway.
+    const stale = [...fileIndex.values()].some((rec) => rec.parserVersion !== PARSER_VERSION);
+    if (stale && dirHandle) {
+      console.log(LOG_PREFIX, "Re-reading files scanned by an older version...");
+      runScan()
+        .then(async () => {
+          await refreshMatchIndex();
+          await rebuildRowLookupFromTracks();
+          updateGridStyle();
+          injectAll();
+        })
+        .catch((e) => console.error(LOG_PREFIX, "Rescan after update failed.", e));
+    }
 
     console.log(LOG_PREFIX, "Initialized.");
   }

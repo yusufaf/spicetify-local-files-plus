@@ -9,7 +9,7 @@ A single-file Spicetify extension (`local-files-plus.js`, ~1700 lines, no build 
 ## Commands
 
 ```bash
-pnpm test          # node --check local-files-plus.js — syntax gate, the only automated test
+pnpm test          # node --check, then node:test suites in test/ (parsers + matching helpers)
 pnpm install        # installs husky hooks via `prepare`
 ```
 
@@ -32,8 +32,8 @@ Everything else needs the live client:
 **Parse → index → match → render**, four largely independent stages:
 
 1. **Parse** (`parseId3v2Header/Body`, `parseFlac`, `parseMp4`) — format-specific byte parsers, each given a `readRange(offset, length) => Promise<ArrayBuffer>` callback rather than a whole file, so they only read the slices they need (ID3v2 header then exactly its declared size; FLAC block headers one at a time; MP4 walks top-level atom headers to find `moov`, then reads that whole subtree in one shot). This matters for MP4 specifically — `mdat` (the actual audio) can be gigabytes and must never be read.
-2. **Index** (`runScan` → IndexedDB `tracks` store, keyed by lowercased absolute path) — a `FileRecord` per file: parsed tags + quality info + `size`/`lastModified` for change detection on rescan.
-3. **Match** (`matchTracksToFiles`) — ties `Spicetify.Platform.LocalFilesAPI.getTracks()` entries to `FileRecord`s. Tier 1: decode the absolute path Spotify embeds in `track.album.images[0].url` (`spotify:localfileimage:<url-encoded-path>`) — this only exists for tracks Spotify itself found *some* album art/tag for. Tier 2: fuzzy-match the rest by normalized filename stem. Real bitrate is computed here (`computeBitrateKbps(file.size, track.duration.milliseconds / 1000)`) since local files only expose duration via `LocalFilesAPI`, not the file itself without a full audio decode.
+2. **Index** (`runScan` → IndexedDB `tracks` store) — a `FileRecord` per file: parsed tags + quality info + `size`/`lastModified` for change detection on rescan, plus `parserVersion`. Keys are lowercased paths **from the chosen folder down** (`music\nujabes\song.mp3`): the File System Access API never reveals where that folder lives. Bump `PARSER_VERSION` whenever the parsers start reading something new, or a rescan keeps serving old records for unchanged files.
+3. **Match** (`matchTracksToFiles`) — ties `Spicetify.Platform.LocalFilesAPI.getTracks()` entries to `FileRecord`s. Tier 1: decode the absolute path Spotify embeds in `track.album.images[0].url` (`spotify:localfileimage:<url-encoded-path>`) — this only exists for tracks Spotify itself found *some* album art/tag for — and look it up with `findIndexKeyForPath`, which tries the longest trailing run of path segments the index has. Tier 2: match the rest by name (`matchNamesForRecord`): exact names (title tag, file name) for every track first, then loose names (file name without a leading track number), so "Days" can't take "10 Days.mp3". `matchTracksToFiles(tracks, index)` and its helpers are pure and tested in `test/matching.test.js`. Known limit: two same-named folders in different places can't be told apart, since the chosen folder's location is never revealed. Real bitrate is computed here (`computeBitrateKbps(file.size, track.duration.milliseconds / 1000)`) since local files only expose duration via `LocalFilesAPI`, not the file itself without a full audio decode.
 4. **Render** — two paths depending on whether a custom sort/filter is active:
    - **Default**: augment Spotify's own virtualized list. `injectRow`/`injectHeader` insert `.lfp-cell` divs into each row/header, matched to Spicetify's own via `SEL_TRACKLIST_ROW`/`SEL_ROW_SECTION_END`. The grid itself is widened by an injected `<style>` overriding `--grid-template-columns` with `!important` on `.main-trackList-trackList.lfp-active` — writing to the element's own inline style directly gets clobbered by React on every re-render, but an `!important` stylesheet rule wins over a non-important inline style.
    - **Custom sort/filter active**: `renderCustomList()` hides Spotify's `.main-rootlist-wrapper` and renders its own small windowed list (`renderCustomRow`, fixed 56px rows, absolute-positioned, buffer of 8 rows above/below viewport) into a sibling container, since Spotify owns row order for its own list and there's no supported way to feed it a different sort.
@@ -41,6 +41,8 @@ Everything else needs the live client:
 **Rows are matched to tracks by visible text, not by DOM/React internals.** `lookupRowRecord` reads a row's title + duration text and looks them up in `rowLookupBuckets` (keyed `"title|duration"`, built from the already-resolved `trackMatchIndex`). This was a deliberate choice over reading the track URI out of the row's React fiber — Spotify sometimes silently substitutes a resolved catalog URI (`spotify:track:...`) for a local file's row instead of `spotify:local:...`, and fiber internals aren't a stable target across Spotify releases anyway. Text-based matching is what `spicetify-album-length` and `spicetify-listening-list` already do successfully.
 
 **The self-poisoning bug to never reintroduce**: `applyMissingMarker` appends a `.lfp-missing-marker` span *inside* the same title element `lookupRowRecord` reads via `.textContent`. If you ever change that lookup back to `titleEl.textContent` instead of `directTextContent(titleEl)` (which reads only direct text-node children, skipping element children like the marker), you get an infinite loop: marker present → title text polluted → lookup fails → marker removed (since a failed match reads as "not missing") → title clean → lookup succeeds → marker re-added → repeat forever, at whatever the observer's debounce interval is. This shipped once and looked like random row flicker; `tests.live.md` T4 exists specifically to catch it again.
+
+**NUL, not space, in the ID3 text decoder.** `decodeId3Text` strips trailing `\0` and splits multi-value frames on `\0`. v0.2.0 shipped with literal spaces there (most likely lost when the source was rebuilt after the hardlink incident above), which cut every multi-word MP3 tag to its first word. `test/parsers.test.js` covers it. Write the escape `\0`, never a raw NUL byte, and check edits made through shell heredocs: they can halve backslashes.
 
 **`.main-rootlist-wrapper` is not unique** — the left sidebar's library list uses the same class. Always go through `findTracklistRootlistWrapper()` (scoped to inside `.main-trackList-trackList`), never a bare `document.querySelector(SEL_ROOTLIST_WRAPPER)` — the latter silently broke the sidebar in testing.
 
@@ -54,7 +56,7 @@ Everything else needs the live client:
 |-----|----------|
 | `local-files-plus-config` (`Spicetify.LocalStorage`) | JSON `{visibleColumns, columnOrder, lastFolderName}` |
 | IndexedDB `local-files-plus` → `handles` | the granted `FileSystemDirectoryHandle` |
-| IndexedDB `local-files-plus` → `tracks` | `FileRecord` per file, keyed by lowercased absolute path |
+| IndexedDB `local-files-plus` → `tracks` | `FileRecord` per file, keyed by lowercased path from the chosen folder down |
 
 ## Conventions
 

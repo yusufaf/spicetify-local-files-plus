@@ -28,8 +28,9 @@ artist, year, genre, track/disc number should match exactly.
 
 ## T2: Grant + scan
 
-- Profile menu → Local Files+ → Choose music folder → pick the same folder Spotify
-  uses for Local Files.
+- Profile menu → Local Files+ (or the **Local Files+ settings** button above the
+  Local Files track list) → Choose music folder → pick the same folder Spotify uses
+  for Local Files. Check both entry points open the same modal.
 - Console: `Scan complete: N parsed, ... total.` — `total` should match the number of
   audio files actually in the folder.
 - IndexedDB `tracks` store count should equal `total`.
@@ -39,7 +40,9 @@ artist, year, genre, track/disc number should match exactly.
 Every `Spicetify.Platform.LocalFilesAPI.getTracks()` entry should resolve to a
 `FileRecord` — including ones with no `album.images[0].url` (Spotify only exposes a
 disk path there for tracks it has *some* album tag for; the remainder rely on the
-title+duration fallback match in `matchTracksToFiles`).
+title-tag / file-name fallback in `matchTracksToFiles`). Do this with a real
+folder grant, not a seeded IndexedDB: seeded records can use any key shape, which
+hid that real scans key files by their path from the chosen folder down.
 
 ## T4: Columns render, no flicker
 
