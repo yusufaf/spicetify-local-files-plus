@@ -18,6 +18,7 @@
 
   /**
    * @typedef {Object} ParsedTags
+   * @property {string|null} title
    * @property {string|null} artist
    * @property {string|null} albumArtist
    * @property {string|null} album
@@ -37,7 +38,8 @@
    */
 
   /**
-   * @typedef {Object} FileRecord Cached per-file index entry, keyed by lowercased absolute path.
+   * @typedef {Object} FileRecord Cached per-file index entry, keyed by its lowercased path
+   *   from the chosen folder down (`music\nujabes\song.mp3`).
    * @property {string} path
    * @property {string} folder
    * @property {string} filename
@@ -47,6 +49,7 @@
    * @property {ParsedTags} tags
    * @property {QualityInfo} quality
    * @property {number} scannedAt
+   * @property {number} [parserVersion] PARSER_VERSION the tags were read with
    */
 
   /**
@@ -63,6 +66,8 @@
   const LOG_PREFIX = "[Local Files+]";
   const DB_NAME = "local-files-plus";
   const DB_VERSION = 1;
+  /** Bump when the parsers start reading something new, so a rescan re-reads files it cached before. */
+  const PARSER_VERSION = 2;
   const STORE_HANDLES = "handles";
   const STORE_TRACKS = "tracks";
   const HANDLE_KEY = "music-folder";
@@ -184,7 +189,7 @@
       text = new TextDecoder("iso-8859-1").decode(body);
     }
     // Strip trailing NULs and split multi-value fields (v2.4 allows NUL-separated values).
-    return text.replace(/ +$/g, "").split(" ")[0].trim();
+    return text.replace(/\0+$/g, "").split("\0")[0].trim();
   }
 
   function decodeUtf16(bytes, hasBom) {
@@ -267,11 +272,11 @@
     const frameHeaderLen = idLen + sizeLen + (major === 2 ? 0 : 2);
 
     const wantedFrames = major === 2
-      ? { TP1: "artist", TP2: "albumArtist", TAL: "album", TYE: "year", TCO: "genre", TRK: "trackNo", TPA: "discNo", TBP: "bpm" }
-      : { TPE1: "artist", TPE2: "albumArtist", TALB: "album", TYER: "year", TDRC: "year", TCON: "genre", TRCK: "trackNo", TPOS: "discNo", TBPM: "bpm" };
+      ? { TT2: "title", TP1: "artist", TP2: "albumArtist", TAL: "album", TYE: "year", TCO: "genre", TRK: "trackNo", TPA: "discNo", TBP: "bpm" }
+      : { TIT2: "title", TPE1: "artist", TPE2: "albumArtist", TALB: "album", TYER: "year", TDRC: "year", TCON: "genre", TRCK: "trackNo", TPOS: "discNo", TBPM: "bpm" };
 
     /** @type {ParsedTags} */
-    const out = { artist: null, albumArtist: null, album: null, year: null, genre: null, trackNo: null, discNo: null, bpm: null };
+    const out = { title: null, artist: null, albumArtist: null, album: null, year: null, genre: null, trackNo: null, discNo: null, bpm: null };
 
     let off = 0;
     while (off + frameHeaderLen <= bytes.length) {
@@ -339,8 +344,8 @@
   function parseId3v1(last128) {
     const b = u8(last128);
     if (b.length < 128 || b[0] !== 0x54 || b[1] !== 0x41 || b[2] !== 0x47) return null; // "TAG"
-    const latin1 = (start, len) => new TextDecoder("iso-8859-1").decode(b.subarray(start, start + len)).replace(/ +$/g, "").replace(/\s+$/, "");
-    const out = { artist: latin1(33, 30) || null, albumArtist: null, album: latin1(63, 30) || null, year: null, genre: null, trackNo: null, discNo: null, bpm: null };
+    const latin1 = (start, len) => new TextDecoder("iso-8859-1").decode(b.subarray(start, start + len)).replace(/\0+$/g, "").replace(/\s+$/, "");
+    const out = { title: latin1(3, 30) || null, artist: latin1(33, 30) || null, albumArtist: null, album: latin1(63, 30) || null, year: null, genre: null, trackNo: null, discNo: null, bpm: null };
     const yearStr = latin1(93, 4);
     if (/^\d{4}$/.test(yearStr)) out.year = parseInt(yearStr, 10);
     // ID3v1.1: comment[28] === 0 means comment[29] is the track number.
@@ -362,7 +367,7 @@
     if (magic.length < 4 || String.fromCharCode(...magic) !== "fLaC") return null;
 
     /** @type {ParsedTags} */
-    const tags = { artist: null, albumArtist: null, album: null, year: null, genre: null, trackNo: null, discNo: null, bpm: null };
+    const tags = { title: null, artist: null, albumArtist: null, album: null, year: null, genre: null, trackNo: null, discNo: null, bpm: null };
     /** @type {QualityInfo} */
     const quality = { lossless: true, bitrateKbps: null, sampleRateHz: null, bitDepth: null };
 
@@ -416,6 +421,7 @@
       const value = entry.slice(eq + 1);
       if (!value) continue;
       switch (key) {
+        case "TITLE": if (!out.title) out.title = value; break;
         case "ARTIST": if (!out.artist) out.artist = value; break;
         case "ALBUMARTIST": case "ALBUM ARTIST": out.albumArtist = value; break;
         case "ALBUM": if (!out.album) out.album = value; break;
@@ -433,6 +439,7 @@
   //#region MP4 / M4A parser
 
   const MP4_TEXT_ATOMS = {
+    "©nam": "title",
     "©ART": "artist",
     "aART": "albumArtist",
     "©alb": "album",
@@ -476,10 +483,16 @@
     const ilst = findMp4Atom(moov, ["udta", "meta:full", "ilst"]);
 
     /** @type {ParsedTags} */
-    const tags = { artist: null, albumArtist: null, album: null, year: null, genre: null, trackNo: null, discNo: null, bpm: null };
+    const tags = { title: null, artist: null, albumArtist: null, album: null, year: null, genre: null, trackNo: null, discNo: null, bpm: null };
     if (ilst) parseMp4Ilst(ilst, tags);
 
-    return { tags, quality: { lossless: false, bitrateKbps: null, sampleRateHz: null, bitDepth: null } };
+    // The codec is the first sample entry in stsd, after its entry count. ALAC and
+    // FLAC-in-MP4 are lossless, and showing them as a kbps figure would mislead.
+    const stsd = findMp4Atom(moov, ["trak", "mdia", "minf", "stbl", "stsd:full"]);
+    const codec = stsd && stsd.length >= 12 ? readFourCC(stsd, 8) : null;
+    const lossless = codec === "alac" || codec === "fLaC";
+
+    return { tags, quality: { lossless, bitrateKbps: null, sampleRateHz: null, bitDepth: null } };
   }
 
   /**
@@ -619,6 +632,47 @@
 
   //#endregion
 
+  //#region Matching helpers (pure)
+
+  /** Lowercases and collapses everything but letters and digits, in any script, to single spaces. */
+  function normalizeForMatch(s) {
+    return (s || "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+  }
+
+  /**
+   * Index keys are paths from the chosen folder down (`music\nujabes\song.mp3`),
+   * because the File System Access API never reveals where that folder lives.
+   * Spotify gives absolute paths (`C:\Users\me\Music\Nujabes\song.mp3`), so this
+   * looks up the longest trailing run of segments the index has.
+   * @param {Map<string, any>} index keyed by lowercased, `\`-separated relative path
+   * @param {string} absolutePath
+   * @returns {string|null} the matching index key
+   */
+  function findIndexKeyForPath(index, absolutePath) {
+    const segments = absolutePath.toLowerCase().split(/[\\/]+/).filter(Boolean);
+    // Stop before the last segment alone: every key includes at least its folder.
+    for (let i = 0; i < segments.length - 1; i++) {
+      const key = segments.slice(i).join("\\");
+      if (index.has(key)) return key;
+    }
+    return null;
+  }
+
+  /**
+   * Names a file could appear under in Spotify, for tracks Spotify gives no path
+   * for: its title tag, its file name, and its file name without a leading track
+   * number ("01 - Song", "1. Song", "06 Song").
+   * @param {{ filename: string, tags: { title?: string|null } }} rec
+   * @returns {string[]} normalized, distinct, non-empty
+   */
+  function matchNamesForRecord(rec) {
+    const stem = rec.filename.replace(/\.[^.]+$/, "");
+    const withoutNumber = stem.replace(/^\s*\d{1,3}\s*[-._)]\s*|^\s*\d{1,3}\s+/, "");
+    return [...new Set([rec.tags.title, stem, withoutNumber].map(normalizeForMatch).filter(Boolean))];
+  }
+
+  //#endregion
+
   //#region Node/browser dual-environment export (parsers are pure — testable under `node`)
 
   if (typeof module !== "undefined" && module.exports) {
@@ -636,6 +690,9 @@
       findMp4Atom,
       parseMp4Ilst,
       computeBitrateKbps,
+      normalizeForMatch,
+      findIndexKeyForPath,
+      matchNamesForRecord,
       formatQuality,
       formatBytes,
       formatDate,
@@ -852,7 +909,7 @@
   /** @param {File} file @param {string} ext @returns {Promise<{ tags: ParsedTags, quality: QualityInfo }>} */
   async function parseFile(file, ext) {
     const readRange = makeReadRange(file);
-    const empty = { artist: null, albumArtist: null, album: null, year: null, genre: null, trackNo: null, discNo: null, bpm: null };
+    const empty = { title: null, artist: null, albumArtist: null, album: null, year: null, genre: null, trackNo: null, discNo: null, bpm: null };
 
     if (ext === ".mp3" || ext === ".aac" || ext === ".wma") {
       const headerBuf = await readRange(0, 10);
@@ -902,7 +959,7 @@
         try {
           const file = await handle.getFile();
           const prior = existing.get(key);
-          if (prior && prior.size === file.size && prior.lastModified === file.lastModified) {
+          if (prior && prior.size === file.size && prior.lastModified === file.lastModified && prior.parserVersion === PARSER_VERSION) {
             nextIndex.set(key, prior);
             lastScanStats.skippedUnchanged++;
             continue;
@@ -920,6 +977,7 @@
             tags: parsed.tags,
             quality: parsed.quality,
             scannedAt: Date.now(),
+            parserVersion: PARSER_VERSION,
           };
           nextIndex.set(key, rec);
           lastScanStats.parsed++;
@@ -970,55 +1028,43 @@
   function matchTracksToFiles(tracks) {
     /** @type {Map<string, FileRecord>} */
     const matched = new Map();
+    /** @type {Set<FileRecord>} records already given to a track */
+    const claimed = new Set();
+    const claim = (track, rec) => {
+      matched.set(track.uri, rec);
+      claimed.add(rec);
+      const kbps = computeBitrateKbps(rec.size, track.duration.milliseconds / 1000);
+      if (!rec.quality.lossless) rec.quality.bitrateKbps = kbps;
+    };
 
-    // Bucket unmatched-by-path file records by rounded duration for fallback lookup.
-    // (Populated lazily below once we know which paths were claimed by tier 1.)
-    const claimedPaths = new Set();
-
+    // Tier 1: the absolute path Spotify embeds in a local track's image URL. It is
+    // only there for tracks Spotify found some album tag for.
     for (const track of tracks) {
       const url = track.album && track.album.images && track.album.images[0] && track.album.images[0].url;
       const path = decodePathFromImageUrl(url);
-      if (path) {
-        const rec = fileIndex.get(path.toLowerCase());
-        if (rec) {
-          matched.set(track.uri, rec);
-          claimedPaths.add(path.toLowerCase());
-          const kbps = computeBitrateKbps(rec.size, track.duration.milliseconds / 1000);
-          if (!rec.quality.lossless) rec.quality.bitrateKbps = kbps;
-        }
-      }
+      const key = path && findIndexKeyForPath(fileIndex, path);
+      const rec = key && fileIndex.get(key);
+      if (rec && !claimed.has(rec)) claim(track, rec);
     }
 
-    // Tier 2: fuzzy match remaining tracks by normalized filename stem. Candidates
-    // are consumed with `.shift()` so exact-duplicate stems pair off deterministically
-    // rather than every remaining track matching the same first candidate.
-    const remaining = tracks.filter((t) => !matched.has(t.uri));
-    if (remaining.length) {
-      /** @type {Map<string, FileRecord[]>} keyed by normalized filename stem */
-      const byStem = new Map();
-      for (const [key, rec] of fileIndex) {
-        if (claimedPaths.has(key)) continue;
-        const stem = normalizeForMatch(rec.filename.replace(/\.[^.]+$/, ""));
-        if (!byStem.has(stem)) byStem.set(stem, []);
-        byStem.get(stem).push(rec);
+    // Tier 2: the rest by name. Each record is offered under its title tag and file
+    // name; the first unclaimed one wins, so duplicate names pair off in order.
+    /** @type {Map<string, FileRecord[]>} */
+    const byName = new Map();
+    for (const rec of fileIndex.values()) {
+      if (claimed.has(rec)) continue;
+      for (const name of matchNamesForRecord(rec)) {
+        if (!byName.has(name)) byName.set(name, []);
+        byName.get(name).push(rec);
       }
-      for (const track of remaining) {
-        const stem = normalizeForMatch(track.name);
-        const candidates = byStem.get(stem);
-        if (candidates && candidates.length) {
-          const rec = candidates.shift();
-          matched.set(track.uri, rec);
-          const kbps = computeBitrateKbps(rec.size, track.duration.milliseconds / 1000);
-          if (!rec.quality.lossless) rec.quality.bitrateKbps = kbps;
-        }
-      }
+    }
+    for (const track of tracks) {
+      if (matched.has(track.uri)) continue;
+      const rec = (byName.get(normalizeForMatch(track.name)) || []).find((r) => !claimed.has(r));
+      if (rec) claim(track, rec);
     }
 
     return matched;
-  }
-
-  function normalizeForMatch(s) {
-    return (s || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
   }
 
   /** @type {Map<string, FileRecord>} keyed by track.uri, refreshed each time the matcher runs */
@@ -1380,7 +1426,7 @@
       const m = tok.match(/^(\w+):(.+)$/);
       if (!m) {
         const needle = tok.toLowerCase();
-        if (needle === "flac" || needle === "lossless") {
+        if (needle === "lossless") {
           preds.push((e) => !!(e.rec && e.rec.quality.lossless));
         } else if (/^(mp3|m4a|mp4|flac|ogg|oga|opus|wav|aac|wma)$/.test(needle)) {
           preds.push((e) => e.rec && e.rec.ext === "." + needle);
@@ -1419,8 +1465,8 @@
       } else if (lowerKey === "missing") {
         const field = val.toLowerCase();
         preds.push((e) => {
-          if (!e.rec) return true;
           if (field === "album") return !e.track.album || !e.track.album.name;
+          if (!e.rec) return false; // not matched to a file, so there are no tags to judge
           if (field === "artist") return !e.rec.tags.artist;
           if (field === "track" || field === "tracknumber") return !e.rec.tags.trackNo;
           return false;
@@ -1428,7 +1474,7 @@
       } else if (lowerKey === "type" || lowerKey === "ext") {
         const needle = "." + val.toLowerCase().replace(/^\./, "");
         preds.push((e) => e.rec && e.rec.ext === needle);
-      } else if (lowerKey === "lossless" || lowerKey === "flac") {
+      } else if (lowerKey === "lossless") {
         preds.push((e) => !!(e.rec && e.rec.quality.lossless));
       }
     }

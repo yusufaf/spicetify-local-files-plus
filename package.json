@@ -4,7 +4,7 @@
   "description": "Real tag metadata (artist, album artist, year, genre, bitrate, and more) as sortable, filterable columns on Spotify's Local Files page.",
   "main": "local-files-plus.js",
   "scripts": {
-    "test": "node --check local-files-plus.js",
+    "test": "node --check local-files-plus.js && node --test \"test/*.test.js\"",
     "prepare": "husky"
   },
   "keywords": [],
