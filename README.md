@@ -19,14 +19,16 @@ Files+ reads it and puts it back.
 ## Features
 
 - **Extra columns**: Quality (bitrate/lossless), Year, Genre, Album Artist, Artist,
-  Type, Size, Date Modified, Track #, BPM, Folder — toggle any of them on/off from
-  Spotify's own "Change visible columns" popover.
-- **Real bitrate**, computed from file size and duration — not guessed.
+  Type, Size, Date Modified, # (track number), BPM, Folder — toggle any of them on/off
+  from Spotify's own "Change visible columns" popover.
+- **Quality**: lossy files show an average bitrate worked out from file size and
+  length (embedded cover art counts toward the size); FLAC, ALAC and WAV show
+  Lossless, with bit depth and sample rate for FLAC.
 - **Missing-tag marker** — a small ⚠ next to any track missing album, artist, or
   track number, so you can spot what still needs tagging.
 - **Sort** by any extra column — click its header.
-- **Filter**, e.g. `flac year:2019 genre:jazz`, `bitrate:>256`, `missing:album`,
-  `folder:Nujabes`.
+- **Filter**, e.g. `flac year:2019 genre:jazz`, `lossless`, `bitrate:>256` (256 or
+  more), `missing:album`, `folder:Nujabes`.
 
 ## How it works
 
@@ -35,7 +37,8 @@ Local Files+ asks for one-time read access to your music folder via the browser'
 — no install, no background process, nothing leaves your machine. It walks the folder,
 parses ID3v2 (MP3), Vorbis comments (FLAC), and MP4 atoms (M4A) directly from the file
 bytes, caches the result, and matches each parsed file back to the track Spotify
-already knows about.
+already knows about: by path where Spotify exposes one, otherwise by title tag or file
+name.
 
 ## Install
 
@@ -69,14 +72,16 @@ later scans only re-parse files that changed.
 
 Tags are parsed from `.mp3` (ID3v2.2/2.3/2.4, falling back to ID3v1), `.flac`
 (Vorbis comments + STREAMINFO for sample rate/bit depth), and `.m4a`/`.mp4` (MP4
-atoms). `.ogg`, `.opus`, and `.wav` are indexed (size, type) but not tag-parsed yet.
+atoms; ALAC is detected as lossless). `.aac` tags are read when the file carries an
+ID3 tag. `.ogg`, `.oga`, `.opus`, `.wav` and `.wma` are indexed (size, type) but their
+tags aren't read yet.
 
 ## Development
 
 No build step — `local-files-plus.js` is the whole extension.
 
 ```bash
-pnpm test          # node --check local-files-plus.js — syntax gate
+pnpm test          # syntax check, then the parser and matching tests in test/
 pnpm install        # installs husky hooks
 ```
 
