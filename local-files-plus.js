@@ -1817,16 +1817,27 @@
 
   // Only what the columns, filter and settings button need. The profile-menu
   // entry is optional and waits separately in registerMenuEntry.
+  const REQUIRED_APIS = {
+    "Spicetify.Platform.History": () => window.Spicetify && Spicetify.Platform && Spicetify.Platform.History,
+    "Spicetify.Platform.LocalFilesAPI": () => window.Spicetify && Spicetify.Platform && Spicetify.Platform.LocalFilesAPI,
+    "Spicetify.LocalStorage": () => window.Spicetify && Spicetify.LocalStorage,
+    "Spicetify.PopupModal": () => window.Spicetify && Spicetify.PopupModal,
+  };
+
   function waitForSpicetify() {
-    return waitFor(
-      {
-        "Spicetify.Platform.History": () => window.Spicetify && Spicetify.Platform && Spicetify.Platform.History,
-        "Spicetify.Platform.LocalFilesAPI": () => window.Spicetify && Spicetify.Platform && Spicetify.Platform.LocalFilesAPI,
-        "Spicetify.LocalStorage": () => window.Spicetify && Spicetify.LocalStorage,
-        "Spicetify.PopupModal": () => window.Spicetify && Spicetify.PopupModal,
+    return waitFor(REQUIRED_APIS, 10000);
+  }
+
+  // Read by spicetify-compat's checker; see its README for the contract.
+  function healthReport() {
+    return {
+      ready: Object.keys(REQUIRED_APIS).every((name) => !!REQUIRED_APIS[name]()),
+      anchors: {
+        filterBar: document.querySelectorAll("#lfp-filter-bar").length,
+        cells: document.querySelectorAll("[data-lfp-col]").length,
       },
-      10000,
-    );
+      errors: [],
+    };
   }
 
   /**
@@ -1896,6 +1907,8 @@
         })
         .catch((e) => console.error(LOG_PREFIX, "Rescan after update failed.", e));
     }
+
+    (window.__spicetifyHealth ??= {})["local-files-plus"] = healthReport;
 
     console.log(LOG_PREFIX, "Initialized.");
   }
