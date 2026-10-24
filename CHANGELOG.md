@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/yusufaf/spicetify-local-files-plus/compare/v0.3.0...v0.4.0) (2026-10-24)
+
+
+### Features
+
+* expose a health check for spicetify-compat ([#7](https://github.com/yusufaf/spicetify-local-files-plus/issues/7)) ([801c3e9](https://github.com/yusufaf/spicetify-local-files-plus/commit/801c3e9a51e435d63414e4fa4acdc9965870f7a4))
+
 ## [0.3.0](https://github.com/yusufaf/spicetify-local-files-plus/compare/v0.2.0...v0.3.0) (2026-10-17)
 
 
