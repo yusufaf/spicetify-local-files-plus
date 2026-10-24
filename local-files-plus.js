@@ -1834,7 +1834,7 @@
       ready: Object.keys(REQUIRED_APIS).every((name) => !!REQUIRED_APIS[name]()),
       anchors: {
         filterBar: document.querySelectorAll("#lfp-filter-bar").length,
-        cells: document.querySelectorAll("[data-lfp-col]").length,
+        cells: document.querySelectorAll("[data-lfp-col]:not(.lfp-cell--header)").length,
       },
       errors: [],
     };
