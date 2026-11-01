@@ -17,7 +17,10 @@
   // Marketplace and the Extensions folder can both load this file; only the first copy runs.
   // Node (unit tests) has no window, and needs the exports at the bottom.
   if (typeof window !== "undefined") {
-    if (window.__localFilesPlusActive) return;
+    if (window.__localFilesPlusActive) {
+      console.info("[Local Files+] Another copy is already running; skipping this one.");
+      return;
+    }
     window.__localFilesPlusActive = true;
   }
 
